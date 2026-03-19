@@ -4,14 +4,22 @@ import math
 import numpy as np
 import requests
 import time
+import os
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 
+SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
+
+def scraper_get(url, timeout=60):
+    if SCRAPER_API_KEY:
+        proxy_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={requests.utils.quote(url, safe=':/?=&')}"
+        return requests.get(proxy_url, timeout=timeout)
+    return requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=timeout)
+
 def hamta_spelarinfo(fide_id: str) -> dict:
     url = f"https://ratings.fide.com/profile/{fide_id}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = scraper_get(url)
         soup = BeautifulSoup(response.text, "html.parser")
         namn = ""
         namn_tag = soup.find("div", class_="profile-title-container")
@@ -33,14 +41,7 @@ def hamta_spelarinfo(fide_id: str) -> dict:
 
 def hamta_perioder(fide_id: str) -> list:
     url = f"https://ratings.fide.com/a_calculations.phtml?event={fide_id}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-    }
-    response = requests.get(url, headers=headers, timeout=30)
-    st.write(f"DEBUG status: {response.status_code}, svarslängd: {len(response.text)} tecken")
-    st.write(f"DEBUG första 500 tecken: {response.text[:500]}")
+    response = scraper_get(url)
     soup = BeautifulSoup(response.text, "html.parser")
     perioder = []
     for lanken in soup.find_all("a", class_="tur"):
@@ -54,9 +55,8 @@ def hamta_perioder(fide_id: str) -> list:
 
 def hamta_partier_for_period(fide_id: str, period: str, rating_typ: str) -> list:
     url = f"https://ratings.fide.com/a_indv_calculations.php?id_number={fide_id}&rating_period={period}&t={rating_typ}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = scraper_get(url)
     except:
         return []
     soup = BeautifulSoup(response.text, "html.parser")
@@ -133,9 +133,8 @@ def berakna_prestationsrating(df: pd.DataFrame, min_motstandare_diff: int = 400,
 
 def hamta_topp_spelare(antal: int = 15) -> list:
     url = "https://ratings.fide.com/a_top.php?list=open"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = scraper_get(url)
         soup = BeautifulSoup(response.text, "html.parser")
         spelare = []
         for rad in soup.find_all("tr"):
