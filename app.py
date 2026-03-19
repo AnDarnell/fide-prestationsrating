@@ -7,8 +7,6 @@ import time
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 
-# ---- Samma funktioner som tidigare ----
-
 def hamta_spelarinfo(fide_id: str) -> dict:
     url = f"https://ratings.fide.com/profile/{fide_id}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -29,16 +27,20 @@ def hamta_spelarinfo(fide_id: str) -> dict:
                 except:
                     pass
         return {"namn": namn, "ratings": ratings}
-    except Exception as e:
+    except:
         return {"namn": "Okänd", "ratings": {}}
+
 
 def hamta_perioder(fide_id: str) -> list:
     url = f"https://ratings.fide.com/a_calculations.phtml?event={fide_id}"
     headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",}
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
     response = requests.get(url, headers=headers, timeout=30)
+    st.write(f"DEBUG status: {response.status_code}, svarslängd: {len(response.text)} tecken")
+    st.write(f"DEBUG första 500 tecken: {response.text[:500]}")
     soup = BeautifulSoup(response.text, "html.parser")
     perioder = []
     for lanken in soup.find_all("a", class_="tur"):
@@ -48,6 +50,7 @@ def hamta_perioder(fide_id: str) -> list:
             rating_typ = href.split("rating=")[1].split("&")[0]
             perioder.append({"period": period, "rating_typ": rating_typ})
     return perioder
+
 
 def hamta_partier_for_period(fide_id: str, period: str, rating_typ: str) -> list:
     url = f"https://ratings.fide.com/a_indv_calculations.php?id_number={fide_id}&rating_period={period}&t={rating_typ}"
@@ -63,8 +66,7 @@ def hamta_partier_for_period(fide_id: str, period: str, rating_typ: str) -> list
         fore_tabell = tabell.find_previous("div", class_="rtng_line01")
         if fore_tabell:
             turnering = fore_tabell.text.strip()
-        rader = tabell.find_all("tr", bgcolor="#efefef")
-        for rad in rader:
+        for rad in tabell.find_all("tr", bgcolor="#efefef"):
             celler = rad.find_all("td", class_="list4")
             if len(celler) >= 6:
                 namn = celler[0].text.strip()
@@ -82,6 +84,7 @@ def hamta_partier_for_period(fide_id: str, period: str, rating_typ: str) -> list
                     })
     return partier
 
+
 def hamta_parti_historik(fide_id: str, antal_partier: int, rating_typ: str, max_ar: int = 3, buffert: float = 2.0) -> pd.DataFrame:
     perioder = hamta_perioder(fide_id)
     perioder = [p for p in perioder if p["rating_typ"] == rating_typ]
@@ -94,11 +97,10 @@ def hamta_parti_historik(fide_id: str, antal_partier: int, rating_typ: str, max_
     for p in perioder:
         if len(alla_partier) >= hamta_antal:
             break
-        partier = hamta_partier_for_period(fide_id, p["period"], p["rating_typ"])
-        alla_partier.extend(partier)
+        alla_partier.extend(hamta_partier_for_period(fide_id, p["period"], p["rating_typ"]))
         time.sleep(1.0)
-    df = pd.DataFrame(alla_partier)
-    return df.head(hamta_antal)
+    return pd.DataFrame(alla_partier).head(hamta_antal)
+
 
 def berakna_prestationsrating(df: pd.DataFrame, min_motstandare_diff: int = 400,
                                officiell_rating: int = None, antal_partier: int = 36) -> float:
@@ -117,8 +119,7 @@ def berakna_prestationsrating(df: pd.DataFrame, min_motstandare_diff: int = 400,
     if df.empty:
         return 0.0
     halvliv = max(5, int(len(df) * 0.4))
-    n = len(df)
-    vikter = np.array([math.exp(-i * math.log(2) / halvliv) for i in range(n)])
+    vikter = np.array([math.exp(-i * math.log(2) / halvliv) for i in range(len(df))])
     snitt_elo = np.average(df["motstandare_elo"], weights=vikter)
     score_procent = np.average(df["poang"], weights=vikter)
     if score_procent >= 1.0:
@@ -129,90 +130,141 @@ def berakna_prestationsrating(df: pd.DataFrame, min_motstandare_diff: int = 400,
         dp = -400 * math.log10(1 / score_procent - 1)
     return round(snitt_elo + dp, 1)
 
-# ---- Streamlit-gränssnitt ----
+
+def hamta_topp_spelare(antal: int = 15) -> list:
+    url = "https://ratings.fide.com/a_top.php?list=open"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+        spelare = []
+        for rad in soup.find_all("tr"):
+            lanken = rad.find("a")
+            if lanken and "/profile/" in lanken.get("href", ""):
+                fide_id = lanken["href"].split("/profile/")[1]
+                namn = lanken.text.strip()
+                celler = rad.find_all("td")
+                rating = celler[3].text.strip() if len(celler) > 3 else ""
+                spelare.append({"fide_id": fide_id, "namn": namn, "rating": rating})
+            if len(spelare) >= antal:
+                break
+        return spelare
+    except:
+        return []
+
+
+@st.cache_data(ttl=3600)
+def skanna_topp_spelare(antal_spelare: int = 15, antal_partier: int = 36) -> pd.DataFrame:
+    spelare = hamta_topp_spelare(antal_spelare)
+    resultat = []
+    for s in spelare:
+        try:
+            df = hamta_parti_historik(s["fide_id"], antal_partier=antal_partier, rating_typ="0")
+            officiell = int(s["rating"]) if s["rating"].isdigit() else None
+            prestationsrating = berakna_prestationsrating(df, officiell_rating=officiell, antal_partier=antal_partier)
+            diff = round(prestationsrating - officiell, 1) if officiell else None
+            resultat.append({
+                "Namn": s["namn"],
+                "Officiell rating": officiell,
+                "Prestationsrating": prestationsrating,
+                "Skillnad": f"{'+' if diff and diff >= 0 else ''}{diff}" if diff else "-",
+            })
+            time.sleep(1.0)
+        except:
+            continue
+    return pd.DataFrame(resultat)
+
 
 st.set_page_config(page_title="FIDE Prestationsrating", page_icon="♟️", layout="centered")
-
 st.title("♟️ FIDE Prestationsrating")
-st.markdown("Beräknar en viktad prestationsrating baserad på de senaste partierna.")
 
-with st.form("sokformular"):
-    fide_id = st.text_input("FIDE-ID", placeholder="T.ex. 1503014")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        rating_typ_val = st.selectbox("Ratingtyp", ["Standard", "Rapid", "Blitz"])
-    with col2:
-        antal = st.number_input("Antal partier", min_value=10, max_value=100, value=36, step=1)
-    
-    sokknapp = st.form_submit_button("Beräkna", use_container_width=True)
+flik1, flik2 = st.tabs(["🔍 Beräkna spelare", "🌍 Världsrankning"])
 
-if sokknapp:
-    if not fide_id.strip().isdigit():
-        st.error("Ange ett giltigt FIDE-ID (endast siffror).")
-    else:
-        rating_typ_map = {"Standard": "0", "Rapid": "1", "Blitz": "2"}
-        rating_typ = rating_typ_map[rating_typ_val]
-        rating_typ_namn = rating_typ_val.lower()
+with flik1:
+    st.markdown("Beräknar en viktad prestationsrating baserad på de senaste partierna.")
 
-        with st.spinner("Hämtar spelarinfo..."):
-            info = hamta_spelarinfo(fide_id)
-        
-        officiell_rating = info["ratings"].get(rating_typ_namn, None)
+    with st.form("sokformular"):
+        fide_id = st.text_input("FIDE-ID", placeholder="T.ex. 1503014")
+        col1, col2 = st.columns(2)
+        with col1:
+            rating_typ_val = st.selectbox("Ratingtyp", ["Standard", "Rapid", "Blitz"])
+        with col2:
+            antal = st.number_input("Antal partier", min_value=10, max_value=100, value=36, step=1)
+        sokknapp = st.form_submit_button("Beräkna", use_container_width=True)
 
-        with st.spinner(f"Hämtar de senaste {antal} partierna..."):
-            df = hamta_parti_historik(fide_id, antal_partier=antal, rating_typ=rating_typ)
-
-        if df.empty:
-            st.error("Kunde inte hitta data. Kontrollera att FIDE-ID:t är korrekt.")
+    if sokknapp:
+        if not fide_id.strip().isdigit():
+            st.error("Ange ett giltigt FIDE-ID (endast siffror).")
         else:
-            df_elo = df.copy()
-            df_elo["motstandare_elo"] = pd.to_numeric(
-                df_elo["motstandare_elo"].str.replace(r"[^\d.]", "", regex=True), errors="coerce"
-            )
-            referens = officiell_rating if officiell_rating else df_elo["motstandare_elo"].mean()
-            df_filtrerad = df_elo[df_elo["motstandare_elo"] >= referens - 400].head(antal)
-            borttagna = len(df) - len(df_filtrerad)
+            rating_typ_map = {"Standard": "0", "Rapid": "1", "Blitz": "2"}
+            rating_typ = rating_typ_map[rating_typ_val]
+            rating_typ_namn = rating_typ_val.lower()
 
-            prestationsrating = berakna_prestationsrating(
-                df, min_motstandare_diff=400, officiell_rating=officiell_rating, antal_partier=antal
-            )
+            with st.spinner("Hämtar spelarinfo..."):
+                info = hamta_spelarinfo(fide_id)
 
-            poang_numerisk = pd.to_numeric(df_filtrerad["resultat"], errors="coerce")
-            score = poang_numerisk.sum()
-            halvliv = max(5, int(len(df_filtrerad) * 0.4))
+            officiell_rating = info["ratings"].get(rating_typ_namn, None)
 
-            # ---- Visa resultat ----
-            st.divider()
-            st.subheader(f"🏆 {info['namn']}")
+            with st.spinner(f"Hämtar de senaste {antal} partierna..."):
+                df = hamta_parti_historik(fide_id, antal_partier=antal, rating_typ=rating_typ)
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Officiell rating", officiell_rating if officiell_rating else "Okänd")
-            
-            if officiell_rating:
-                diff = round(prestationsrating - officiell_rating, 1)
-                col2.metric("Prestationsrating", prestationsrating, delta=f"{'+' if diff >= 0 else ''}{diff}")
+            if df.empty:
+                st.error("Kunde inte hitta data. Kontrollera att FIDE-ID:t är korrekt.")
             else:
-                col2.metric("Prestationsrating", prestationsrating)
-            
-            col3.metric("Score%", f"{round(score/len(df_filtrerad)*100, 1)}%")
+                df_elo = df.copy()
+                df_elo["motstandare_elo"] = pd.to_numeric(
+                    df_elo["motstandare_elo"].str.replace(r"[^\d.]", "", regex=True), errors="coerce"
+                )
+                referens = officiell_rating if officiell_rating else df_elo["motstandare_elo"].mean()
+                df_filtrerad = df_elo[df_elo["motstandare_elo"] >= referens - 400].head(antal)
+                borttagna = len(df) - len(df_filtrerad)
 
-            col4, col5, col6 = st.columns(3)
-            col4.metric("Partier analyserade", f"{len(df_filtrerad)} / {antal}")
-            col5.metric("Snitt motståndares elo", round(df_filtrerad["motstandare_elo"].mean(), 1))
-            col6.metric("Viktningens halvliv", f"{halvliv} partier")
+                prestationsrating = berakna_prestationsrating(
+                    df, min_motstandare_diff=400, officiell_rating=officiell_rating, antal_partier=antal
+                )
 
-            if borttagna > 0:
-                st.info(f"{borttagna} partier hoppades över pga för låg motståndarrating.")
+                poang_numerisk = pd.to_numeric(df_filtrerad["resultat"], errors="coerce")
+                score = poang_numerisk.sum()
+                halvliv = max(5, int(len(df_filtrerad) * 0.4))
 
+                st.divider()
+                st.subheader(f"🏆 {info['namn']}")
+
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Officiell rating", officiell_rating if officiell_rating else "Okänd")
+                if officiell_rating:
+                    diff = round(prestationsrating - officiell_rating, 1)
+                    col2.metric("Prestationsrating", prestationsrating, delta=f"{'+' if diff >= 0 else ''}{diff}")
+                else:
+                    col2.metric("Prestationsrating", prestationsrating)
+                col3.metric("Score%", f"{round(score/len(df_filtrerad)*100, 1)}%")
+
+                col4, col5, col6 = st.columns(3)
+                col4.metric("Partier analyserade", f"{len(df_filtrerad)} / {antal}")
+                col5.metric("Snitt motståndares elo", round(df_filtrerad["motstandare_elo"].mean(), 1))
+                col6.metric("Viktningens halvliv", f"{halvliv} partier")
+
+                if borttagna > 0:
+                    st.info(f"{borttagna} partier hoppades över pga för låg motståndarrating.")
+
+                st.divider()
+                st.subheader("Partihistorik")
+                st.dataframe(
+                    df_filtrerad[["period", "turnering", "motstandare", "motstandare_elo", "land", "resultat"]],
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+with flik2:
+    st.markdown("Jämför officiell rating mot prestationsrating för världens top 15.")
+    st.warning("Scanningen tar 5-10 minuter eftersom data hämtas för varje spelare. Resultatet cachas i 1 timme.")
+
+    if st.button("Kör världsrankning-scan", use_container_width=True):
+        with st.spinner("Skannar top 15 – detta tar några minuter..."):
+            df_topp = skanna_topp_spelare()
+        if df_topp.empty:
+            st.error("Kunde inte hämta data.")
+        else:
             st.divider()
-            st.subheader("Partihistorik")
-            st.dataframe(
-                df_filtrerad[["period", "turnering", "motstandare", "motstandare_elo", "land", "resultat"]],
-                use_container_width=True,
-                hide_index=True
-            )
-
-
-# Starta appen med:
-# streamlit run app.py
+            st.subheader("Top 15 – Officiell vs Prestationsrating")
+            st.dataframe(df_topp, use_container_width=True, hide_index=True)
